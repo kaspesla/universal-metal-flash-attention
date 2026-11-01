@@ -69,10 +69,17 @@ fallback to PyTorch SDPA for anything UMFA can't handle.
 
 ## Review
 Done on ai-toolkit branch `feature/metal-flash-attention` (uncommitted):
-- `toolkit/util/metal_flash_attention.py`: `install_metal_flash_attention()` swaps
-  `F.scaled_dot_product_attention` for `metal_sdpa_extension.metal_scaled_dot_product_attention`
-  on MPS tensors; non-MPS goes to the original. UMFA's C++ does its own fallback
+- `toolkit/util/metal_flash_attention.py`: `install_metal_flash_attention()` imports
+  `metal_sdpa_extension`. The import itself registers UMFA for
+  `aten::scaled_dot_product_attention` on the MPS dispatch key
+  (`metal_sdpa_backend.cpp` `TORCH_LIBRARY_IMPL(aten, MPS, ...)`), so every MPS SDPA
+  call in the process goes to UMFA. Not reversible in-process. (An earlier version also
+  monkeypatched F.sdpa, which was redundant.) UMFA's C++ does its own fallback
   (dropout, masks while training, unsupported dtype/shape).
+- Lesson (2026-11-01): the first check script imported the extension before taking the
+  torch baseline, so it compared UMFA to itself (exactly 0 error, identical timings).
+  Now it takes the baseline before importing and scores both against an fp32 explicit-math reference.
+  `aten::_scaled_dot_product_attention_math_for_mps` has no derivative, so it can't be the reference.
 - `BaseSDTrainProcess.py`: `attention_backend == 'metal_flash'` → install, skip diffusers `set_attention_backend`.
 - `testing/check_metal_flash_attention.py`: fwd + grads vs torch SDPA, timing, dispatch counters.
 
