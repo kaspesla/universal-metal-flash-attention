@@ -238,21 +238,23 @@ int encode_attention_on_torch_stream(
                 num_heads, head_dim, softmax_scale,
                 is_causal,
                 input_precision, intermediate_precision);
-        });
-        if (rc == 0) {
-            // Submit without waiting; later torch ops on the stream stay
-            // ordered after this kernel.
-            torch::mps::commit();
-            // Debug aid: MFA_INSTREAM_SYNC=1 fully synchronizes after every
-            // encode to distinguish overlap hazards from encode bugs.
-            static const bool debug_sync = []() {
-                const char* env = std::getenv("MFA_INSTREAM_SYNC");
-                return env && env[0] == '1';
-            }();
-            if (debug_sync) {
-                torch::mps::synchronize();
+            if (rc == 0) {
+                // Submit without waiting; later torch ops on the stream stay
+                // ordered after this kernel. Commit this thread's stream from
+                // its own queue: torch::mps::commit() commits the default
+                // stream, which isn't this one on non-main threads (torch
+                // gives each thread its own stream), and newer torch asserts
+                // when it's called off the stream's queue.
+                // Debug aid: MFA_INSTREAM_SYNC=1 waits for every encode to
+                // finish, to distinguish overlap hazards from encode bugs.
+                static const bool debug_sync = []() {
+                    const char* env = std::getenv("MFA_INSTREAM_SYNC");
+                    return env && env[0] == '1';
+                }();
+                stream->synchronize(debug_sync ? at::mps::SyncType::COMMIT_AND_WAIT
+                                               : at::mps::SyncType::COMMIT);
             }
-        }
+        });
     }
     return rc;
 }
