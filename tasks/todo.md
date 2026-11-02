@@ -96,6 +96,16 @@ Known gaps:
 - Minimax H3 VSA sparse attention uses flex_attention, not SDPA, so it isn't affected (it needs triton anyway).
 - Masked calls cost one GPU sync for UMFA's all-true-mask check.
 
+### ComfyUI node (2026-11-01)
+`examples/comfyui-umfa/`: "UMFA Attention (Metal)" MODEL→MODEL node sets
+`optimized_attention_override` → ComfyUI's `attention_pytorch`, whose SDPA is served by UMFA
+once the extension is imported (lazily, on first use). ComfyUI on Mac defaults to
+sub-quadratic attention. Verified against ComfyUI 0.12.3 code with a counting SDPA stand-in;
+real-kernel test pending on the macOS 15+ Mac. Install steps in its README.
+
+Results from the macOS 15+ Mac (check script, bf16, S=4096): forward error matches torch;
+grads ~2x torch error (~1 bf16 ulp); fwd+bwd 0.86x (12 heads), 1.04x (24), 1.19x (40), 1.43x causal.
+
 ### Runbook on macOS 15+
 Forks: `kaspesla/ai-toolkit` and `kaspesla/universal-metal-flash-attention`, both on
 branch `feature/metal-flash-attention` (`upstream` remote = original repo).
