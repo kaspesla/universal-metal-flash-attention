@@ -106,6 +106,17 @@ real-kernel test pending on the macOS 15+ Mac. Install steps in its README.
 Results from the macOS 15+ Mac (check script, bf16, S=4096): forward error matches torch;
 grads ~2x torch error (~1 bf16 ulp); fwd+bwd 0.86x (12 heads), 1.04x (24), 1.19x (40), 1.43x causal.
 
+UMFA bugs found and fixed (2026-11-01, verified on the macOS 15+ Mac):
+- `55fd867` in-stream path committed `torch::mps::commit()` (default stream) off the
+  stream's queue → `_dispatch_assert_queue_fail` crash on ComfyUI's worker thread.
+- `fc44179` `mfa_attention_encode_mtl` dropped offsets/strides (regression from `0206bba`)
+  → every no-grad call with transposed or chunked q/k/v returned garbage (H3 samples were a
+  grid of blocks). After the fix, H3 samples look right.
+
+Measured: ComfyUI Minimax H3, 5 s video, fresh process per run: 57 → 49 s/it (~1.16x
+end to end) vs ComfyUI's default attention. ai-toolkit native vs metal_flash training s/it
+and memory on the same config are not yet measured.
+
 ### Runbook on macOS 15+
 Forks: `kaspesla/ai-toolkit` and `kaspesla/universal-metal-flash-attention`, both on
 branch `feature/metal-flash-attention` (`upstream` remote = original repo).
