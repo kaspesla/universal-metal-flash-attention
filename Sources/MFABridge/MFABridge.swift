@@ -2674,6 +2674,10 @@ public func mfa_attention_encode_mtl(
   let encoded = multiHeadAttention.encodeForward(
     commandBuffer: cb,
     query: qBuf, key: kBuf, value: vBuf, output: outBuf,
+    queryOffset: qOffset, keyOffset: kOffset,
+    valueOffset: vOffset, outputOffset: outOffset,
+    queryStrides: strideArray(qStrides), keyStrides: strideArray(kStrides),
+    valueStrides: strideArray(vStrides),
     descriptor: multiHeadDescriptor,
     maskBuffer: preparedMask?.buffer
   )
