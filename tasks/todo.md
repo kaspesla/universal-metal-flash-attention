@@ -118,7 +118,7 @@ UMFA bugs found and fixed (2026-11-01, verified on the macOS 15+ Mac):
   `.contiguous()` copies, d_output, the grad zero-fills, the LSE CPU→MPS copy) can run after
   UMFA reads or writes. Restored the syncs via a per-thread `synchronize_current_stream()`,
   moved the backward sync after the zero-fills, and allocate LSE/D scratch on the device.
-  Not yet verified on the macOS 15+ Mac. The check script gained a model-shaped training case
+  Verified on the macOS 15+ Mac: all check cases OK, including the new one. The check script gained a model-shaped training case
   (fused qkv projection, no syncs, worst of 3 steps) that should catch this.
 
 Measured: ComfyUI Minimax H3, 5 s video, fresh process per run: 57 → 49 s/it (~1.16x
