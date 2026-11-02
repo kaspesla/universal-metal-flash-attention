@@ -57,13 +57,24 @@ The desktop app's Python is `~/Documents/ComfyUI/.venv` (check `basePath` in
    ```bash
    cd ~/Sandbox/universal-metal-flash-attention/examples/pytorch-custom-op-ffi && ~/Documents/ComfyUI/.venv/bin/python -m pip install --no-build-isolation .
    ```
-4. Link the node into ComfyUI and restart ComfyUI:
+4. Copy the node into ComfyUI's `custom_nodes` and restart ComfyUI:
    ```bash
-   ln -s ~/Sandbox/universal-metal-flash-attention/examples/comfyui-umfa ~/Documents/ComfyUI/custom_nodes/comfyui-umfa
+   cp -R ~/Sandbox/universal-metal-flash-attention/examples/comfyui-umfa ~/Documents/ComfyUI/custom_nodes/
    ```
+   Re-copy after pulling node changes. A symlink also works, but only if its
+   target exists and the user running ComfyUI can read it. Otherwise ComfyUI
+   fails with `UnboundLocalError: ... 'sys_module_name'`, since it treats a
+   dangling or unreadable link as neither a file nor a folder.
 
 The extension loads the Swift library from `universal-metal-flash-attention/.build`,
-so don't move or delete that folder.
+so don't move or delete that folder, and make sure the user running ComfyUI can read it.
+
+For a manual (non-desktop) ComfyUI install, use the Python that runs ComfyUI in
+steps 2–3 instead of `~/Documents/ComfyUI/.venv/bin/python`. With ComfyUI running,
+this prints it:
+```bash
+ps -o command= -p $(pgrep -f 'main.py' | head -1)
+```
 
 ## Use and compare
 
