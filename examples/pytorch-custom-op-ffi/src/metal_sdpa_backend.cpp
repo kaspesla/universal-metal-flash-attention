@@ -1003,21 +1003,23 @@ torch::Tensor MetalSDPABackend::call_swift_flash_attention_impl(
     // Metal command queue. Without sync, the kernel sees stale/uninitialised
     // data.
     //
-    // On MPS we zero-copy bind the tensors' MTLBuffers. The UMFA kernel
-    // dispatches on its own Metal command queue, but because the buffers
-    // are .storageModeShared (MPS allocator default) the GPU writes from
-    // PyTorch's preceding ops are visible once the command buffer is
-    // submitted — Metal serialises command-buffer execution per queue and
-    // the shared storage mode provides cross-queue visibility without an
+    // Also synchronize on entry for already-contiguous tensors: PyTorch may
+    // have queued producer ops (matmul, activation, etc.) on the MPS command
+    // queue that write to the tensor's buffer. UMFA's kernel runs on a
+    // separate Metal command queue and would read the buffer before those
+    // writes complete. This matches the torch.mps.synchronize() the SimpleTuner
+    // wrapper now does, but makes the extension safe when called directly.
     if (use_mps_buffers) {
-        // no sync — rely on shared-storage visibility
+        mps_utils::synchronize_current_stream();
     }
 
     bool did_contiguous = false;
     if (!q_tensor.is_contiguous()) { q_tensor = q_tensor.contiguous(); did_contiguous = true; }
     if (!k_tensor.is_contiguous()) { k_tensor = k_tensor.contiguous(); did_contiguous = true; }
     if (!v_tensor.is_contiguous()) { v_tensor = v_tensor.contiguous(); did_contiguous = true; }
-    // no sync after contiguous — shared-storage buffers are visible cross-queue
+    if (did_contiguous) {
+        mps_utils::synchronize_current_stream();
+    }
 
     auto q_sizes = q_tensor.sizes();
     auto k_sizes = k_tensor.sizes();
@@ -2338,6 +2340,7 @@ torch::Tensor MetalSDPABackend::quantized_scaled_dot_product_attention_unified(
     bool use_mps_buffers = query.device().is_mps() && key.device().is_mps() && value.device().is_mps();
     torch::Tensor q_staged, k_staged, v_staged;
     if (use_mps_buffers) {
+        mps_utils::synchronize_current_stream();
         q_staged = query.contiguous();
         k_staged = key.contiguous();
         v_staged = value.contiguous();
@@ -2572,6 +2575,7 @@ public:
     key = key.contiguous();
     value = value.contiguous();
     if (query.device().type() == at::kMPS) {
+      mps_utils::synchronize_current_stream();
     }
 
     auto q_sizes = query.sizes();
@@ -2589,7 +2593,7 @@ public:
     auto output_dtype = orig_dtype == torch::kFloat32 ? orig_dtype : torch::kFloat32;
     auto output = torch::empty(query.sizes(), query.options().dtype(output_dtype));
     auto lse = torch::empty(
-        {batch * heads * seq_q}, torch::kFloat32).to(query.device());
+        {batch * heads * seq_q}, query.options().dtype(torch::kFloat32));
 
     // Bind buffers.
     auto bind = [&](torch::Tensor &t) -> mfa_buffer_t {
@@ -2671,16 +2675,19 @@ public:
     uint32_t seq_kv = static_cast<uint32_t>(key.size(2));
     uint16_t dim = static_cast<uint16_t>(q_sizes[3]);
 
-    if (query.device().type() == at::kMPS) {
-    }
-
     auto mfa_ctx = MetalSDPABackend::get_swift_context();
     auto fp32_options = query.options().dtype(torch::kFloat32);
     auto d_query = torch::zeros(query.sizes(), fp32_options);
     auto d_key = torch::zeros(key.sizes(), fp32_options);
     auto d_value = torch::zeros(value.sizes(), fp32_options);
     auto d_buffer = torch::zeros(
-        {batch * heads * seq_q}, torch::kFloat32).to(query.device());
+        {batch * heads * seq_q}, query.options().dtype(torch::kFloat32));
+
+    // UMFA runs on its own queue: drain torch's stream (d_output's producers
+    // and the zero-fills above) before it reads or writes these buffers.
+    if (query.device().type() == at::kMPS) {
+      mps_utils::synchronize_current_stream();
+    }
 
     auto output_fp32 = saved[3];
 
@@ -2823,12 +2830,13 @@ public:
     // Drain the torch stream so the rotations (and any producer ops) are
     // visible to the attention primitive running on UMFA's own queue.
     if (query.device().type() == at::kMPS) {
+      mps_utils::synchronize_current_stream();
     }
 
     auto output_dtype = orig_dtype == torch::kFloat32 ? orig_dtype : torch::kFloat32;
     auto output = torch::empty(query.sizes(), query.options().dtype(output_dtype));
     auto lse = torch::empty(
-        {batch * heads * seq_q}, torch::kFloat32).to(query.device());
+        {batch * heads * seq_q}, query.options().dtype(torch::kFloat32));
 
     auto bind = [&](torch::Tensor &t) -> mfa_buffer_t {
       mfa_buffer_t h = nullptr;
@@ -2906,8 +2914,6 @@ public:
       d_output = d_output.to(d_output_dtype);
     }
     d_output = d_output.contiguous();
-    if (q_rot.device().type() == at::kMPS) {
-    }
 
     auto q_sizes = q_rot.sizes();
     uint32_t batch = static_cast<uint32_t>(q_sizes[0]);
@@ -2921,7 +2927,13 @@ public:
     auto d_k_rot = torch::zeros(k_rot.sizes(), fp32_options);
     auto d_value = torch::zeros(value.sizes(), fp32_options);
     auto d_buffer = torch::zeros(
-        {batch * heads * seq_q}, torch::kFloat32).to(q_rot.device());
+        {batch * heads * seq_q}, q_rot.options().dtype(torch::kFloat32));
+
+    // Drain torch's stream (d_output's producers and the zero-fills above)
+    // before UMFA's own queue touches these buffers.
+    if (q_rot.device().type() == at::kMPS) {
+      mps_utils::synchronize_current_stream();
+    }
 
     auto bind = [&](torch::Tensor &t) -> mfa_buffer_t {
       mfa_buffer_t h = nullptr;
@@ -3052,6 +3064,7 @@ public:
     key = key.contiguous();
     value = value.contiguous();
     if (query.device().type() == at::kMPS) {
+      mps_utils::synchronize_current_stream();
     }
 
     auto q_sizes = query.sizes();
@@ -3071,7 +3084,7 @@ public:
         {batch, heads, seq_q, dim},
         torch::dtype(torch::kFloat32).device(query.device()));
     auto lse = torch::empty(
-        {batch * heads * seq_q}, torch::kFloat32).to(query.device());
+        {batch * heads * seq_q}, query.options().dtype(torch::kFloat32));
 
     auto bind = [&](torch::Tensor &t) -> mfa_buffer_t {
       mfa_buffer_t h = nullptr;
@@ -3103,6 +3116,7 @@ public:
         m = m.expand({batch, heads, seq_q, seq_kv}).contiguous();
         mask_tensor = m;
         if (query.device().type() == at::kMPS) {
+            mps_utils::synchronize_current_stream();
         }
         mask_b = bind(mask_tensor);
     }
@@ -3188,6 +3202,7 @@ public:
     // the FFI writes. Without this, the MPS zero-fill can execute after the
     // FFI write, overwriting the gradients.
     if (query.device().type() == at::kMPS) {
+      mps_utils::synchronize_current_stream();
     }
 
     auto bind = [&](torch::Tensor &t) -> mfa_buffer_t {
@@ -3209,6 +3224,7 @@ public:
     mfa_buffer_t mask_b = nullptr;
     if (mask_tensor.defined()) {
         if (query.device().type() == at::kMPS) {
+            mps_utils::synchronize_current_stream();
         }
         mask_b = bind(mask_tensor);
     }

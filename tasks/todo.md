@@ -112,6 +112,14 @@ UMFA bugs found and fixed (2026-11-01, verified on the macOS 15+ Mac):
 - `fc44179` `mfa_attention_encode_mtl` dropped offsets/strides (regression from `0206bba`)
   → every no-grad call with transposed or chunked q/k/v returned garbage (H3 samples were a
   grid of blocks). After the fix, H3 samples look right.
+- (2026-11-02) training samples went black after step 0 (weights NaN). Upstream `1f0f44c`
+  removed every `torch::mps::synchronize()` before UMFA's own-queue calls on the theory that
+  shared storage gives cross-queue ordering. It doesn't: torch's queued producers (the
+  `.contiguous()` copies, d_output, the grad zero-fills, the LSE CPU→MPS copy) can run after
+  UMFA reads or writes. Restored the syncs via a per-thread `synchronize_current_stream()`,
+  moved the backward sync after the zero-fills, and allocate LSE/D scratch on the device.
+  Not yet verified on the macOS 15+ Mac. The check script gained a model-shaped training case
+  (fused qkv projection, no syncs, worst of 3 steps) that should catch this.
 
 Measured: ComfyUI Minimax H3, 5 s video, fresh process per run: 57 → 49 s/it (~1.16x
 end to end) vs ComfyUI's default attention. ai-toolkit native vs metal_flash training s/it

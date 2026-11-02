@@ -10,6 +10,12 @@ bool is_mps_tensor(const at::Tensor& tensor);
 // Returns opaque pointer to id<MTLBuffer> (or nullptr on failure)
 void* get_mtl_buffer_handle(const at::Tensor& tensor);
 
+// Blocks until all work queued on this thread's MPS stream has finished.
+// Required before UMFA calls that run on UMFA's own command queue (the
+// autograd and legacy paths): torch's pending ops on the same buffers are
+// otherwise unordered against UMFA's kernels.
+void synchronize_current_stream();
+
 /// Returns the current MPS-stream command buffer as an opaque pointer
 /// (id<MTLCommandBuffer> bridged to void*). Calls endKernelCoalescing()
 /// first so the returned buffer gets its own properly-ordered pass.

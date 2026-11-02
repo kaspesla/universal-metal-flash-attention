@@ -58,6 +58,17 @@ void* get_mtl_buffer_handle(const at::Tensor& tensor) {
     return (__bridge void*)buffer;
 }
 
+void synchronize_current_stream() {
+    // Commit and wait on this thread's stream from its own queue.
+    // torch::mps::synchronize() drains the default stream, which isn't this
+    // one on non-main threads, and newer torch asserts off the stream's queue.
+    at::mps::MPSStream* stream = at::mps::getCurrentMPSStream();
+    if (!stream) return;
+    dispatch_sync(stream->queue(), ^{
+        stream->synchronize(at::mps::SyncType::COMMIT_AND_WAIT);
+    });
+}
+
 void* acquire_mps_command_buffer() {
     at::mps::MPSStream* stream = at::mps::getCurrentMPSStream();
     if (!stream) return nullptr;
@@ -274,6 +285,8 @@ bool is_mps_tensor(const at::Tensor&) {
 void* get_mtl_buffer_handle(const at::Tensor&) {
     return nullptr;
 }
+
+void synchronize_current_stream() {}
 
 int encode_rope_rotate_on_torch_stream(
     void*, const at::Tensor&, const at::Tensor&, const at::Tensor&,
